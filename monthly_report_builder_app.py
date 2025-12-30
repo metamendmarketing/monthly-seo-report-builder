@@ -160,16 +160,23 @@ def gpt_generate_email(client: OpenAI, model: str, payload: dict, synthesis_imag
 Style and tone:
 - Write like a real person emailing a client you know well.
 - Friendly, professional, and focused on what matters to the client.
-- Use plain English (avoid SEO jargon, buzzwords, and hype).
+- Use plain English (avoid marketing jargon, buzzwords, and hype).
 - Contractions are encouraged where natural.
 - Do not include over-the-top pleasantries.
 - Do NOT mention confidence labels.
+- Do not say things like "Technical updates shipped" or "knocked out technical updates" or "wrapped up technical updates".
+
+Examples of preferred language style:
+- “We addressed several technical issues that were causing…”
+- “We resolved a canonical redirect issue that was causing Google to crawl fewer pages.”
+- “We identified and corrected an indexing issue affecting…”
+- “We updated internal linking to support…”
 
 Content rules:
 - Use Omni notes as the source of truth for work completed, in-progress work, blockers, and context.
-- Do NOT invent metrics, results, or causality. If impact is unknown, say impact is pending / not yet measured.
-- If screenshots show explicit labels/numbers/statuses, you may reference them conservatively.
-- Avoid repeating exact date ranges. Prefer “in the reporting month” unless the user explicitly provided date ranges that must be used.
+- Do NOT invent metrics, results, or causality. If impact obviously correlates to work completed or insights gained from screenshots mention it, otherwise say nothing about it.
+- If uploaded screenshots show explicit labels, numbers, or statuses, reference them to provide context, observations or an insight, if there is a direct correlation between results or work completed mention it.
+- Avoid repeating exact date ranges. Prefer language like “this month, in December we, during the period”.
 
 Verbosity control:
 Adjust wording based on CONTEXT.verbosity_level. Do NOT add new sections in any mode.
