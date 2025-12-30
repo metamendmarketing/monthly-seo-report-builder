@@ -13,6 +13,15 @@ from email import policy
 
 APP_TITLE = "Metamend Monthly SEO Email Builder"
 DEFAULT_MODEL = "gpt-5.2"
+
+# Canned opening lines (used by the Opening line suggestions)
+CANNED_OPENERS = [
+    "Hope you’re doing well — please see your monthly SEO status update below.",
+    "Sharing this month’s SEO update below, including the key wins, opportunities, and next steps.",
+    "Here’s your monthly SEO progress update — we’ve highlighted what moved, what it means, and what we’re prioritizing next.",
+    "Below is the monthly SEO status update for {month_label}.",
+    "Hope you’re having a great holiday season — please see your monthly SEO status update below.",
+]
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "monthly_email_template.html")
 
 # ---------- helpers ----------
@@ -222,13 +231,13 @@ st.markdown("""
 <style>
   /* Align with quarterly tool: compact headers, consistent spacing */
   .block-container { padding-top: 1.2rem; padding-bottom: 2.2rem; }
-  h1 { margin-bottom: 0.2rem; }
+  h1 { margin-bottom: 0.2rem; font-size: 1.75rem; }
   /* Slightly tighter section spacing */
   div[data-testid="stVerticalBlock"] > div:has(> hr) { margin-top: 0.6rem; margin-bottom: 0.6rem; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(f"# {APP_TITLE}")
+st.markdown(f"<h1 style=\"font-size:1.75rem; margin:0 0 0.75rem 0;\">{APP_TITLE}</h1>", unsafe_allow_html=True)
 st.caption("Builds a monthly SEO update email (HTML) and an Outlook-ready .eml with inline screenshots.")
 
 api_key = get_api_key()
@@ -240,8 +249,12 @@ today = datetime.date.today()
 ss_init("client_name","")
 ss_init("website","")
 ss_init("month_label", today.strftime("%B %Y"))
-ss_init("report_range", (today.replace(day=1), today))
 ss_init("dashthis_url","")
+
+ss_init("recipient_first_name","")
+ss_init("opening_line_choice","Custom…")
+ss_init("opening_line","")
+ss_init("show_opening_suggestions", False)
 
 ss_init("omni_notes_paste_input","")
 ss_init("omni_notes_pasted","")
@@ -260,14 +273,47 @@ with st.expander("Inputs", expanded=True):
     st.session_state.client_name = st.text_input("Client name", value=st.session_state.client_name)
     st.session_state.website = st.text_input("Website", value=st.session_state.website, placeholder="https://...")
     st.session_state.month_label = st.text_input("Month label", value=st.session_state.month_label, placeholder="March 2026")
-
-    rr = st.session_state.report_range
-    st.session_state.report_range = st.date_input("Reporting range", value=rr, key="monthly_reporting_range")
-
     st.session_state.dashthis_url = st.text_input("DashThis report URL", value=st.session_state.dashthis_url)
 
-    st.divider()
-    st.subheader("Upload files + Omni notes")
+    # Recipient + Opening line (optional)
+    st.session_state.recipient_first_name = st.text_input(
+        "Recipient first name(s) (Optional)",
+        value=st.session_state.get("recipient_first_name", ""),
+    )
+
+    # Opening line (optional) — set via Suggestions popover (no separate field)
+    # Keep the currently selected suggestion in sync (if the current opening line matches a canned option)
+    cur_ol = (st.session_state.get("opening_line") or "").strip()
+    if cur_ol and cur_ol in CANNED_OPENERS:
+        st.session_state.opening_line_choice = cur_ol
+    else:
+        st.session_state.opening_line_choice = ""
+
+    st.markdown("**Opening line (Optional)**")
+    with st.popover("Suggestions", use_container_width=False):
+        def _apply_opener_choice():
+            choice = (st.session_state.get("opening_line_choice") or "").strip()
+            if not choice:
+                return
+            ml = (st.session_state.get("month_label") or "").strip()
+            st.session_state.opening_line = choice.replace("{month_label}", ml if ml else "this month")
+
+        st.selectbox(
+            "Opening line suggestions",
+            options=[""] + CANNED_OPENERS,
+            key="opening_line_choice",
+            format_func=lambda x: "Select a suggestion…" if x == "" else x,
+            on_change=_apply_opener_choice,
+        )
+
+        st.text_area(
+            "Opening line (custom)",
+            key="opening_line",
+            placeholder="e.g., Hope you’re doing well — please see your monthly SEO status update below.",
+            height=90,
+        )
+
+        st.caption("Pick a canned opener to fill the line, or type your own. Your latest text is what will be used.")
 
     uploaded = st.file_uploader(
         "Upload screenshots / supporting docs (optional)",
@@ -383,7 +429,6 @@ if st.button("Generate Email Draft", type="primary", disabled=not can_generate, 
         "client_name": st.session_state.client_name.strip(),
         "website": st.session_state.website.strip(),
         "month_label": st.session_state.month_label.strip(),
-        "reporting_period": f"{st.session_state.report_range[0]} to {st.session_state.report_range[1]}",
         "dashthis_url": st.session_state.dashthis_url.strip(),
         "omni_notes": st.session_state.omni_notes_pasted.strip(),
         "verbosity_level": st.session_state.get("verbosity_level", "Quick scan"),
@@ -435,7 +480,7 @@ with st.expander("Edit sections", expanded=True):
     dashthis_line = st.text_area("DashThis line", value=data.get("dashthis_line", ""), height=70)
 
     st.divider()
-    st.subheader("Screenshots (optional)")
+    st.subheader("Screenshots Placement")
     imgs = [f for f in (st.session_state.uploaded_files or []) if f.name.lower().endswith((".png",".jpg",".jpeg"))]
     if not imgs:
         st.caption("No screenshots uploaded.")
@@ -464,9 +509,7 @@ with st.expander("Edit sections", expanded=True):
                     cap = st.text_input("Caption", value=st.session_state.image_captions.get(fn,""), key=f"cap_{fn}")
                     st.session_state.image_captions[fn] = cap
     
-    st.divider()
-    st.subheader("Export")
-
+    
     template = load_template()
 
     def _lines(s: str) -> List[str]:
@@ -509,10 +552,22 @@ with st.expander("Edit sections", expanded=True):
     sec_done = append_images(sec_done, "completed_tasks")
     sec_next = append_images(sec_next, "outstanding_tasks")
 
+
+    # Greeting block (optional): salutation + opening line (both editable)
+    rec = (st.session_state.get("recipient_first_name") or "").strip()
+    opener = (st.session_state.get("opening_line") or "").strip()
+    greeting_parts = []
+    if rec:
+        greeting_parts.append(f'<div style="margin:0 0 6px 0;">Hi {html_escape(rec)},</div>')
+    if opener:
+        greeting_parts.append(f'<div style="margin:0 0 12px 0;">{html_escape(opener)}</div>')
+    greeting_block_html = "\n".join(greeting_parts) if greeting_parts else ""
+
     html_out = (template
         .replace("{{CLIENT_NAME}}", html_escape(st.session_state.client_name.strip() or "Client"))
         .replace("{{MONTH_LABEL}}", html_escape(st.session_state.month_label.strip() or "Monthly"))
         .replace("{{WEBSITE}}", html_escape(st.session_state.website.strip() or ""))
+        .replace("{{GREETING_BLOCK}}", greeting_block_html)
         .replace("{{MONTHLY_OVERVIEW}}", html_escape(monthly_overview or ""))
         .replace("{{DASHTHIS_URL}}", html_escape(st.session_state.dashthis_url.strip() or ""))
         .replace("{{DASHTHIS_LINE}}", html_escape(dashthis_line or ""))
@@ -530,13 +585,14 @@ with st.expander("Edit sections", expanded=True):
         mime = image_mimes.get(cid, "image/png")
         data_uri = f"data:{mime};base64," + base64.b64encode(b).decode("utf-8")
         preview_html = preview_html.replace(f"cid:{cid}", data_uri)
-
-
-    st.download_button("Download HTML", data=html_out.encode("utf-8"), file_name="monthly_seo_update.html", mime="text/html")
-    st.download_button("Download .eml (Outlook-ready)", data=eml_bytes, file_name="monthly_seo_update.eml", mime="message/rfc822")
-
     with st.expander("Preview HTML"):
         st.components.v1.html(preview_html, height=600, scrolling=True)
+
+
+    st.divider()
+    st.subheader("Export")
+
+    st.download_button("Download .eml (Outlook-ready)", data=eml_bytes, file_name="monthly_seo_update.eml", mime="message/rfc822")
 
     with st.expander("Copy/paste HTML (optional)"):
         st.code(html_out, language="html")
