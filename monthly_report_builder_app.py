@@ -4,9 +4,13 @@ import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
-import re
-import os
-import asyncio
+
+# Ensure Playwright browsers use a shared, repo-local cache on Streamlit Cloud
+os.environ.setdefault(
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "/mount/src/monthly-seo-report-builder/.cache/ms-playwright"
+)
+
 
 # Optional PDF export via Playwright (Chromium print-to-PDF). Hidden if unavailable.
 PLAYWRIGHT_AVAILABLE = True

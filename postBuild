@@ -1,2 +1,7 @@
 #!/usr/bin/env bash
+set -euxo pipefail
+
+# Force browser install into a path that is consistent between build and runtime.
+export PLAYWRIGHT_BROWSERS_PATH="/mount/src/monthly-seo-report-builder/.cache/ms-playwright"
+
 python -m playwright install chromium
