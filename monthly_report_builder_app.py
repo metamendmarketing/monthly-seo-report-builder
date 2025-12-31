@@ -3,6 +3,39 @@ import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
+import re
+import os
+import asyncio
+
+# Optional PDF export via Playwright (Chromium print-to-PDF). Hidden if unavailable.
+PLAYWRIGHT_AVAILABLE = True
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    PLAYWRIGHT_AVAILABLE = False
+
+def html_to_pdf_bytes(html: str) -> bytes:
+    if not PLAYWRIGHT_AVAILABLE:
+        raise RuntimeError("Playwright is not available.")
+    html = html or ""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1100, "height": 1400})
+        page.set_content(html, wait_until="networkidle")
+        pdf_bytes = page.pdf(
+            format="Letter",
+            print_background=True,
+            margin={"top": "0.75in", "bottom": "0.75in", "left": "0.75in", "right": "0.75in"},
+        )
+        browser.close()
+        return pdf_bytes
+
+# Playwright on Windows needs ProactorEventLoopPolicy for subprocess support.
+if os.name == "nt":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
 from openai import OpenAI
 
 from email.mime.multipart import MIMEMultipart
@@ -22,6 +55,225 @@ CANNED_OPENERS = [
     "Below is the monthly SEO status update for {month_label}.",
     "Hope you’re having a great holiday season — please see your monthly SEO status update below.",
 ]
+
+
+# --- Email signature presets (optional) ---
+SIGNATURE_OPTIONS = ["None", "Kevin", "Simon", "Alisa", "Billy"]
+
+SIGNATURE_DATA = {
+    "Kevin": {
+        "name": "Kevin Osborne",
+        "title": "",
+        "phone": "",
+        "org": "Metamend Digital Marketing",
+        "linkedin": "",
+    },
+    "Simon": {
+        "name": "Simon Vreeswijk",
+        "title": "",
+        "phone": "",
+        "org": "Metamend Digital Marketing",
+        "linkedin": "",
+    },
+    "Alisa": {
+        "name": "Alisa Miriev",
+        "title": "Digital Marketing Analyst",
+        "phone": "M: (416) 902-3245",
+        "org": "Metamend Digital Marketing",
+        "linkedin": "",
+    },
+    "Billy": {
+        "name": "Billy Gacek",
+        "title": "Paid Search Manager",
+        "phone": "M: 1.778.875.8558",
+        "org": "Metamend Digital Marketing",
+        "linkedin": "https://www.linkedin.com/in/billygacek/",
+    },
+}
+
+# Embedded Metamend logo for signatures (CID: sig_logo)
+SIGNATURE_LOGO_PNG_B64 = """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
+RU5ErkJggg=="""
+
+def render_signature_html(choice: str) -> str:
+    """Return Outlook-friendly signature HTML (Aptos 12px)."""
+    if not choice or choice == "None":
+        return ""
+    sig = SIGNATURE_DATA.get(choice)
+    if not sig:
+        return ""
+    # Inline styles for maximum email client compatibility
+    font = "font-family:Aptos, 'Segoe UI', Arial, sans-serif; font-size:12pt; mso-ansi-font-size:12pt; mso-bidi-font-size:12pt; color:#000;"
+    name_html = html_escape(sig.get("name",""))
+    title_html = html_escape(sig.get("title",""))
+    phone_html = html_escape(sig.get("phone",""))
+    org_html = html_escape(sig.get("org",""))
+    linkedin = (sig.get("linkedin") or "").strip()
+    linkedin_html = ""
+    if linkedin:
+        href = html_escape(linkedin)
+        linkedin_html = f'<div style="margin:2px 0 0 0; padding:0;"><a href="{href}" style="color:#0563C1; text-decoration:underline;">Linkedin</a></div>'
+    # Only include lines that exist (Simon has no phone; Kevin has only org)
+    title_line = f'<div style="margin:2px 0 0 0; padding:0;">{title_html}</div>' if title_html else ""
+    phone_line = f'<div style="margin:2px 0 0 0; padding:0;">{phone_html}</div>' if phone_html else ""
+    org_line = f'<div style="margin:2px 0 0 0; padding:0;">{org_html}</div>' if org_html else ""
+    return f"""
+    <div style="margin-top:16px;">
+      <div style="{font}">
+        <div style="font-weight:700; margin:0; padding:0;">{name_html}</div>
+        {title_line}
+        {org_line}
+        {phone_line}
+        {linkedin_html}
+        <div style="margin-top:8px;">
+          <img src="cid:sig_logo" alt="Metamend" style="display:block; height:34px; border:0; outline:none; text-decoration:none;" />
+        </div>
+      </div>
+    </div>
+    """
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "monthly_email_template.html")
 
 # ---------- helpers ----------
@@ -88,7 +340,7 @@ def section_block(title: str, body_html: str) -> str:
 def image_block(cid: str, caption: str = "") -> str:
     cap = ""
     if (caption or "").strip():
-        cap = f'<div style="font-size:10.5pt;color:#374151;margin-top:6px;line-height:1.35;">{html_escape(caption)}</div>'
+        cap = f'<div style="font-size:10.5pt;color:#374151;margin-top:6px;line-height:1.35;font-style:italic;">{html_escape(caption)}</div>'
     return f"""
 <div style="margin:10px 0 12px 0;">
   <img src="cid:{cid}" style="width:100%;height:auto;max-width:900px;border:1px solid #e5e7eb;display:block;" />
@@ -250,6 +502,7 @@ ss_init("client_name","")
 ss_init("website","")
 ss_init("month_label", today.strftime("%B %Y"))
 ss_init("dashthis_url","")
+ss_init("signature_choice","None")
 
 ss_init("recipient_first_name","")
 ss_init("opening_line_choice","Custom…")
@@ -274,6 +527,13 @@ with st.expander("Inputs", expanded=True):
     st.session_state.website = st.text_input("Website", value=st.session_state.website, placeholder="https://...")
     st.session_state.month_label = st.text_input("Month label", value=st.session_state.month_label, placeholder="March 2026")
     st.session_state.dashthis_url = st.text_input("DashThis report URL", value=st.session_state.dashthis_url)
+
+    # Email signature (optional) — appended to bottom of the email
+    st.session_state.signature_choice = st.selectbox(
+        "Email signature (Optional)",
+        options=SIGNATURE_OPTIONS,
+        index=SIGNATURE_OPTIONS.index(st.session_state.get("signature_choice", "None")) if st.session_state.get("signature_choice", "None") in SIGNATURE_OPTIONS else 0,
+    )
 
     # Recipient + Opening line (optional)
     st.session_state.recipient_first_name = st.text_input(
@@ -563,11 +823,29 @@ with st.expander("Edit sections", expanded=True):
         greeting_parts.append(f'<div style="margin:0 0 12px 0;">{html_escape(opener)}</div>')
     greeting_block_html = "\n".join(greeting_parts) if greeting_parts else ""
 
+    # Signature block (optional) appended at bottom of email
+    signature_choice = st.session_state.get("signature_choice", "None")
+    signature_block_html = render_signature_html(signature_choice)
+
+    # If a signature is selected, embed the signature logo as an inline CID image so it renders in Outlook and Preview.
+    if signature_choice and signature_choice != "None" and signature_block_html:
+        try:
+            _sig_b64 = (SIGNATURE_LOGO_PNG_B64 or "").strip().replace("\n", "")
+            _sig_bytes = base64.b64decode(_sig_b64)
+            # Avoid duplicates if rerun
+            if not any(cid == "sig_logo" for cid, _ in image_parts):
+                image_parts.append(("sig_logo", _sig_bytes))
+                image_mimes["sig_logo"] = "image/png"
+        except Exception:
+            # Fail quietly: signature will render without the logo rather than breaking generation/export.
+            pass
+
     html_out = (template
         .replace("{{CLIENT_NAME}}", html_escape(st.session_state.client_name.strip() or "Client"))
         .replace("{{MONTH_LABEL}}", html_escape(st.session_state.month_label.strip() or "Monthly"))
         .replace("{{WEBSITE}}", html_escape(st.session_state.website.strip() or ""))
         .replace("{{GREETING_BLOCK}}", greeting_block_html)
+        .replace("{{SIGNATURE_BLOCK}}", signature_block_html)
         .replace("{{MONTHLY_OVERVIEW}}", html_escape(monthly_overview or ""))
         .replace("{{DASHTHIS_URL}}", html_escape(st.session_state.dashthis_url.strip() or ""))
         .replace("{{DASHTHIS_LINE}}", html_escape(dashthis_line or ""))
@@ -587,16 +865,48 @@ with st.expander("Edit sections", expanded=True):
         preview_html = preview_html.replace(f"cid:{cid}", data_uri)
     with st.expander("Preview HTML"):
         st.components.v1.html(preview_html, height=600, scrolling=True)
-
-
-    st.divider()
+st.divider()
+with st.container(border=True):
     st.subheader("Export")
 
-    st.download_button("Download .eml (Outlook-ready)", data=eml_bytes, file_name="monthly_seo_update.eml", mime="message/rfc822")
+    # Filenames (computed locally to avoid Streamlit rerun scope issues)
+    _client_name_for_files = (st.session_state.get("client_name") or "").strip()
+    _safe_client_name = re.sub(r"[^A-Za-z0-9]+", "", _client_name_for_files) or "monthly"
+
+    _month_label_for_files = (st.session_state.get("month_label") or "").strip()
+    _safe_month_label = re.sub(r"\s+", "-", _month_label_for_files)
+    _safe_month_label = re.sub(r"[^A-Za-z0-9\-]+", "", _safe_month_label) or "Month"
+
+    eml_filename = f"{_safe_client_name}-seo-update.eml"
+    pdf_filename = f"{_safe_client_name}-Monthly-SEO-Report-{_safe_month_label}.pdf"
+
+    col_eml, col_pdf = st.columns(2)
+    with col_eml:
+        st.download_button(
+            "Download .eml (Outlook-ready)",
+            data=eml_bytes,
+            file_name=eml_filename,
+            mime="message/rfc822",
+        )
+
+    with col_pdf:
+        if PLAYWRIGHT_AVAILABLE:
+            try:
+                pdf_bytes = html_to_pdf_bytes(preview_html)
+                st.download_button(
+                    "Download PDF",
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                )
+            except Exception as _pdf_exc:
+                st.caption(f"PDF export unavailable: {_pdf_exc}")
+        else:
+            st.caption("PDF export unavailable (Playwright/Chromium not installed).")
 
     with st.expander("Copy/paste HTML (optional)"):
         st.code(html_out, language="html")
 
-    if show_raw and st.session_state.raw:
+if show_raw and st.session_state.raw:
         with st.expander("GPT output (raw)"):
             st.code(st.session_state.raw)
