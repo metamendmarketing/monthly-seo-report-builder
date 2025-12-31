@@ -5,12 +5,12 @@ from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
 
-# Ensure Playwright browsers use a shared, repo-local cache on Streamlit Cloud
-os.environ.setdefault(
-    "PLAYWRIGHT_BROWSERS_PATH",
-    "/mount/src/monthly-seo-report-builder/.cache/ms-playwright"
-)
+# Use a repo-local Playwright browser cache (works on Streamlit Cloud)
+os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', os.path.join(os.getcwd(), '.cache', 'ms-playwright'))
 
+import re
+import os
+import asyncio
 
 # Optional PDF export via Playwright (Chromium print-to-PDF). Hidden if unavailable.
 PLAYWRIGHT_AVAILABLE = True
@@ -22,60 +22,75 @@ except Exception:
 
 _PW_BOOTSTRAPPED = False
 
-def ensure_playwright_chromium() -> None:
-    """Best-effort Chromium install for Streamlit Cloud/container environments."""
+def ensure_playwright_chromium(force: bool = False) -> None:
+    """Ensure Playwright Chromium is installed.
+
+    On Streamlit Community Cloud, Python packages install fine but Playwright browser
+    binaries are not automatically downloaded. We install Chromium into
+    PLAYWRIGHT_BROWSERS_PATH (set near the imports).
+    """
     global _PW_BOOTSTRAPPED
-    if _PW_BOOTSTRAPPED:
+    if _PW_BOOTSTRAPPED and not force:
         return
     _PW_BOOTSTRAPPED = True
 
-    # Never run this on Windows.
     if os.name == "nt":
         return
     if not PLAYWRIGHT_AVAILABLE:
         return
 
-    # Streamlit Cloud/container heuristics.
-    in_cloud = bool(
-        os.environ.get("STREAMLIT_CLOUD")
-        or os.environ.get("STREAMLIT_SHARING")
-        or os.environ.get("STREAMLIT_RUNTIME_ENV")
-        or os.environ.get("STREAMLIT_DEPLOYMENT")
-        or os.environ.get("STREAMLIT_SERVER_HEADLESS")
-        or os.environ.get("K_REVISION")
-        or os.environ.get("RENDER")
-        or os.environ.get("FLY_APP_NAME")
-        or os.environ.get("ENABLE_PLAYWRIGHT_BOOTSTRAP") == "1"
-    )
-    if not in_cloud:
-        return
+    browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.join(os.getcwd(), ".cache", "ms-playwright")
+
+    # If Chromium already exists, do nothing.
+    try:
+        if not force and os.path.isdir(browsers_path):
+            for name in os.listdir(browsers_path):
+                if name.startswith("chromium"):
+                    return
+    except Exception:
+        pass
 
     try:
+        env = os.environ.copy()
+        env["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
         subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
             check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            env=env,
         )
     except Exception:
         pass
 
 def html_to_pdf_bytes(html: str) -> bytes:
-    ensure_playwright_chromium()
+    """Render the Preview HTML to a PDF using Playwright Chromium."""
     if not PLAYWRIGHT_AVAILABLE:
         raise RuntimeError("Playwright is not available.")
     html = html or ""
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1100, "height": 1400})
-        page.set_content(html, wait_until="networkidle")
-        pdf_bytes = page.pdf(
-            format="Letter",
-            print_background=True,
-            margin={"top": "0.75in", "bottom": "0.75in", "left": "0.75in", "right": "0.75in"},
-        )
-        browser.close()
-        return pdf_bytes
+
+    def _render_once() -> bytes:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            page = browser.new_page(viewport={"width": 1100, "height": 1400})
+            page.set_content(html, wait_until="networkidle")
+            pdf_bytes = page.pdf(
+                format="Letter",
+                print_background=True,
+                margin={"top": "0.75in", "bottom": "0.75in", "left": "0.75in", "right": "0.75in"},
+            )
+            browser.close()
+            return pdf_bytes
+
+    try:
+        ensure_playwright_chromium()
+        return _render_once()
+    except Exception as e:
+        msg = str(e)
+        # If browser binaries are missing, install Chromium and retry once.
+        if ("Executable doesn't exist" in msg) or ("playwright install" in msg):
+            ensure_playwright_chromium(force=True)
+            return _render_once()
+        raise
+
 
 # Playwright on Windows needs ProactorEventLoopPolicy for subprocess support.
 if os.name == "nt":
