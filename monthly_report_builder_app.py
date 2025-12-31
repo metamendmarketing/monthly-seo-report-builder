@@ -3,6 +3,9 @@ import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
+
+template = None
+
 import re
 import os
 import sys
@@ -877,7 +880,10 @@ with st.expander("Edit sections", expanded=True):
             # Fail quietly: signature will render without the logo rather than breaking generation/export.
             pass
 
-    html_out = (template
+    if 'template' not in globals() or template is None:
+    template = load_template()
+
+html_out = (template
         .replace("{{CLIENT_NAME}}", html_escape(st.session_state.client_name.strip() or "Client"))
         .replace("{{MONTH_LABEL}}", html_escape(st.session_state.month_label.strip() or "Monthly"))
         .replace("{{WEBSITE}}", html_escape(st.session_state.website.strip() or ""))
