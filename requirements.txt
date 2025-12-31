@@ -1,3 +1,4 @@
 streamlit
+playwright
 openai
 python-dotenv
