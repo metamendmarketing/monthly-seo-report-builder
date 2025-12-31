@@ -3,6 +3,63 @@ import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
+
+DEFAULT_TEMPLATE_HTML = """<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#ffffff;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#ffffff;">
+      <tr>
+        <!-- Left-aligned, full-width email body (no centered card). -->
+        <td style="padding:18px 24px;background:#ffffff;
+                   font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;
+                   font-size:12pt;line-height:1.45;color:#111827;
+                   mso-fareast-font-family:Aptos;mso-bidi-font-family:Aptos;
+                   mso-line-height-rule:exactly;">
+
+          <!-- Title -->
+          <div style="font-size:16pt;color:#1257c7;margin:0 0 4px 0;">{{CLIENT_NAME}} - SEO Monthly Update</div>
+          <div style="font-size:10.5pt;color:#6b7280;margin:0 0 14px 0;">{{MONTH_LABEL}} · {{WEBSITE}}</div>
+
+          <!-- Overview -->
+          <div style="white-space:pre-wrap;margin:0 0 12px 0;">{{MONTHLY_OVERVIEW}}</div>
+
+          <!-- DashThis (near the top) -->
+          <div style="margin:0 0 12px 0;">
+            <strong>DashThis Analytics dashboard:</strong>
+            <a href="{{DASHTHIS_URL}}" style="color:#0b5bd3;font-weight:700;text-decoration:underline;">View live performance</a>
+          </div>
+
+          <!-- Divider -->
+          <hr style="border:0;border-top:1px solid #d1d5db;margin:12px 0;" />
+
+          <!-- Sections (no nested tables; inherit font) -->
+          {{SECTION_KEY_HIGHLIGHTS}}
+          <hr style="border:0;border-top:1px solid #d1d5db;margin:12px 0;" />
+
+          {{SECTION_WINS_PROGRESS}}
+          <hr style="border:0;border-top:1px solid #d1d5db;margin:12px 0;" />
+
+          {{SECTION_BLOCKERS}}
+          <hr style="border:0;border-top:1px solid #d1d5db;margin:12px 0;" />
+
+          {{SECTION_COMPLETED_TASKS}}
+          <hr style="border:0;border-top:1px solid #d1d5db;margin:12px 0;" />
+
+          {{SECTION_OUTSTANDING_TASKS}}
+
+
+          <!-- Closing line (keep minimal; Outlook signature should follow naturally) -->
+          <div style="margin:14px 0 0 0;">Please let me know if you have any questions.</div>
+
+<div style="margin:14px 0 0 0;">Thank you!</div>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
 import re
 import os
 import sys
@@ -522,6 +579,8 @@ Output requirements:
 
 # ---------- UI ----------
 # Centered, single-column layout so users can scroll straight down to the draft.
+TEMPLATE_HTML = load_template()
+
 st.set_page_config(page_title=APP_TITLE, layout="centered")
 st.markdown("""
 <style>
@@ -881,7 +940,10 @@ with st.expander("Edit sections", expanded=True):
             # Fail quietly: signature will render without the logo rather than breaking generation/export.
             pass
 
-    html_out = (TEMPLATE_HTML
+    if 'TEMPLATE_HTML' not in globals() or TEMPLATE_HTML is None:
+    TEMPLATE_HTML = DEFAULT_TEMPLATE_HTML
+
+html_out = (TEMPLATE_HTML
         .replace("{{CLIENT_NAME}}", html_escape(st.session_state.client_name.strip() or "Client"))
         .replace("{{MONTH_LABEL}}", html_escape(st.session_state.month_label.strip() or "Monthly"))
         .replace("{{WEBSITE}}", html_escape(st.session_state.website.strip() or ""))
