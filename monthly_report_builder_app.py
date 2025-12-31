@@ -3,9 +3,6 @@ import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
 import streamlit as st
-
-template = None
-
 import re
 import os
 import sys
@@ -28,7 +25,7 @@ def ensure_playwright_chromium() -> None:
         return
     _PW_BOOTSTRAPPED = True
 
-    # Don't run bootstrap on Windows/local dev
+    # Never run this bootstrap on Windows/local dev.
     if os.name == "nt":
         return
     if not PLAYWRIGHT_AVAILABLE:
@@ -57,7 +54,9 @@ def ensure_playwright_chromium() -> None:
         )
     except Exception:
         pass
+
 def html_to_pdf_bytes(html: str) -> bytes:
+    ensure_playwright_chromium()
     if not PLAYWRIGHT_AVAILABLE:
         raise RuntimeError("Playwright is not available.")
     html = html or ""
@@ -317,7 +316,9 @@ def render_signature_html(choice: str) -> str:
       </div>
     </div>
     """
-TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "monthly_email_template.html")
+TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "monthly_email_template.html")
+if not os.path.exists(TEMPLATE_PATH):
+    TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "monthly_email_template.html")
 
 # ---------- helpers ----------
 def ss_init(key: str, default):
@@ -880,10 +881,7 @@ with st.expander("Edit sections", expanded=True):
             # Fail quietly: signature will render without the logo rather than breaking generation/export.
             pass
 
-    if 'template' not in globals() or template is None:
-    template = load_template()
-
-html_out = (template
+    html_out = (TEMPLATE_HTML
         .replace("{{CLIENT_NAME}}", html_escape(st.session_state.client_name.strip() or "Client"))
         .replace("{{MONTH_LABEL}}", html_escape(st.session_state.month_label.strip() or "Monthly"))
         .replace("{{WEBSITE}}", html_escape(st.session_state.website.strip() or ""))
