@@ -6,11 +6,57 @@ import streamlit as st
 import re
 import os
 import asyncio
+import subprocess
+import sys
 
 # Optional PDF export via Playwright (Chromium print-to-PDF). Hidden if unavailable.
 PLAYWRIGHT_AVAILABLE = True
 try:
     from playwright.sync_api import sync_playwright
+
+# --- Streamlit Cloud bootstrap: ensure Chromium is installed for Playwright PDF export ---
+# Streamlit Cloud builds don't always run `playwright install chromium`, so we do a safe, one-time runtime check.
+_PW_BOOTSTRAPPED = False
+
+def ensure_playwright_chromium() -> None:
+    global _PW_BOOTSTRAPPED
+    if _PW_BOOTSTRAPPED:
+        return
+    # Never run this on Windows/local dev by default
+    if os.name == "nt":
+        _PW_BOOTSTRAPPED = True
+        return
+    if not PLAYWRIGHT_AVAILABLE:
+        return
+
+    # Heuristics for Streamlit Cloud / container environments
+    in_streamlit_cloud = bool(
+        os.environ.get("STREAMLIT_CLOUD")
+        or os.environ.get("STREAMLIT_SHARING")
+        or os.environ.get("STREAMLIT_RUNTIME_ENV")
+        or os.environ.get("STREAMLIT_DEPLOYMENT")
+        or os.environ.get("STREAMLIT_SERVER_HEADLESS")
+        or os.environ.get("HEROKU_APP_NAME")
+        or os.environ.get("K_REVISION")  # Cloud Run
+        or os.environ.get("RENDER")
+        or os.environ.get("FLY_APP_NAME")
+        or os.environ.get("ENABLE_PLAYWRIGHT_BOOTSTRAP") == "1"
+    )
+
+    if not in_streamlit_cloud:
+        _PW_BOOTSTRAPPED = True
+        return
+
+    try:
+        # Install browsers quietly; no-op if already installed.
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    finally:
+        _PW_BOOTSTRAPPED = True
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
 
