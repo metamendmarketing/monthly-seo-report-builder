@@ -3,6 +3,27 @@ import sys, subprocess, asyncio
 import email.utils
 from typing import Dict, Optional, List, Tuple, Any
 
+# --- Optional parsing dependencies (graceful fallback if missing) ---
+try:
+    import pandas as pd
+except Exception:
+    pd = None
+
+try:
+    import pdfplumber
+except Exception:
+    pdfplumber = None
+
+try:
+    from PyPDF2 import PdfReader
+except Exception:
+    PdfReader = None
+
+try:
+    import docx as docx_lib
+except Exception:
+    docx_lib = None
+
 import streamlit as st
 
 # Use a repo-local Playwright browser cache (works on Streamlit Cloud)
@@ -443,6 +464,173 @@ TEMPLATE_HTML = load_template()
 def html_escape(s: str) -> str:
     return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
+# --- Supporting context extraction (PDF/DOCX/TXT/XLSX/CSV) ---
+MAX_SUPPORTING_TEXT_CHARS = 180_000
+MAX_TABLE_ROWS_PREVIEW = 40
+MAX_TABLE_COLS_PREVIEW = 30
+
+def _safe_decode_text(data: bytes) -> str:
+    for enc in ("utf-8", "utf-16", "latin-1"):
+        try:
+            return data.decode(enc)
+        except Exception:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+def _normalize_ws(s: str) -> str:
+    s = (s or "").replace("\r\n", "\n").replace("\r", "\n")
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+def _clamp_text(s: str, max_chars: int) -> str:
+    s = s or ""
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars] + "\n\n[TRUNCATED]"
+
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    parts = []
+    if pdfplumber is not None:
+        try:
+            import io as _io
+            with pdfplumber.open(_io.BytesIO(file_bytes)) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    t = page.extract_text() or ""
+                    if t.strip():
+                        parts.append(f"[PDF page {i+1}]\n{t}")
+            return _normalize_ws("\n\n".join(parts))
+        except Exception:
+            pass
+    if PdfReader is not None:
+        try:
+            import io as _io
+            reader = PdfReader(_io.BytesIO(file_bytes))
+            for i, page in enumerate(reader.pages):
+                t = page.extract_text() or ""
+                if t.strip():
+                    parts.append(f"[PDF page {i+1}]\n{t}")
+            return _normalize_ws("\n\n".join(parts))
+        except Exception:
+            return ""
+    return ""
+
+def _extract_docx_text(file_bytes: bytes) -> str:
+    if docx_lib is None:
+        return ""
+    try:
+        import io as _io
+        doc = docx_lib.Document(_io.BytesIO(file_bytes))
+        paras = [p.text for p in doc.paragraphs if (p.text or "").strip()]
+        return _normalize_ws("\n".join(paras))
+    except Exception:
+        return ""
+
+def _df_preview(df):
+    if pd is None:
+        return {"error": "pandas not installed"}
+    try:
+        df2 = df.copy()
+        if df2.shape[1] > MAX_TABLE_COLS_PREVIEW:
+            df2 = df2.iloc[:, :MAX_TABLE_COLS_PREVIEW]
+        truncated = df2.shape[0] > MAX_TABLE_ROWS_PREVIEW
+        df_preview = df2.head(MAX_TABLE_ROWS_PREVIEW) if truncated else df2
+        headers = [str(h) for h in df_preview.columns.tolist()]
+        rows = df_preview.fillna("").astype(str).values.tolist()
+        stats = {}
+        numeric_cols = [c for c in df2.columns if pd.api.types.is_numeric_dtype(df2[c])]
+        for c in numeric_cols[:12]:
+            col = df2[c].dropna()
+            if len(col) == 0:
+                continue
+            stats[str(c)] = {"min": float(col.min()), "max": float(col.max()), "mean": float(col.mean())}
+        return {"shape": [int(df.shape[0]), int(df.shape[1])], "headers": headers, "rows": rows, "truncated": truncated, "numeric_stats": stats}
+    except Exception as e:
+        return {"error": str(e)}
+
+def build_supporting_context(files) -> dict:
+    """
+    Extract evidence from non-image uploads into a structured supporting_context.
+    Images are still analyzed via vision (sent separately); this context is for PDFs/docs/sheets/text.
+    """
+    import os as _os
+    import io as _io
+    import mimetypes as _mimetypes
+
+    supporting = {"documents": [], "tables": [], "notes": []}
+    total_chars = 0
+
+    for f in (files or []):
+        name = getattr(f, "name", "uploaded_file")
+        ext = (_os.path.splitext(name)[1] or "").lower()
+        mime = getattr(f, "type", None) or _mimetypes.guess_type(name)[0] or "application/octet-stream"
+        b = f.getvalue()
+
+        # Skip images here (they go through synthesis_images)
+        if mime.startswith("image/") or ext in (".png", ".jpg", ".jpeg"):
+            continue
+
+        if mime == "application/pdf" or ext == ".pdf":
+            t = _extract_pdf_text(b)
+            t = _clamp_text(t, 40_000)
+            total_chars += len(t)
+            if t.strip():
+                supporting["documents"].append({"filename": name, "type": "pdf", "text": t})
+            else:
+                supporting["notes"].append(f"Could not extract text from PDF: {name}")
+            continue
+
+        if ext == ".docx" or mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            t = _extract_docx_text(b)
+            t = _clamp_text(t, 40_000)
+            total_chars += len(t)
+            if t.strip():
+                supporting["documents"].append({"filename": name, "type": "docx", "text": t})
+            else:
+                supporting["notes"].append(f"Could not extract text from DOCX: {name}")
+            continue
+
+        if mime.startswith("text/") or ext in (".txt", ".md", ".log"):
+            t = _normalize_ws(_safe_decode_text(b))
+            t = _clamp_text(t, 40_000)
+            total_chars += len(t)
+            if t.strip():
+                supporting["documents"].append({"filename": name, "type": "text", "text": t})
+            continue
+
+        if ext in (".xlsx", ".xls", ".xlsm") or mime in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"):
+            if pd is None:
+                supporting["notes"].append(f"Skipped spreadsheet (pandas not installed): {name}")
+                continue
+            try:
+                bio = _io.BytesIO(b)
+                xl = pd.ExcelFile(bio, engine="openpyxl")
+                for sheet in xl.sheet_names[:10]:
+                    df = xl.parse(sheet_name=sheet)
+                    supporting["tables"].append({"filename": name, "type": "xlsx", "sheet": sheet, "table": _df_preview(df)})
+            except Exception as e:
+                supporting["notes"].append(f"Failed to parse spreadsheet {name}: {e}")
+            continue
+
+        if ext == ".csv" or mime in ("text/csv", "application/csv"):
+            if pd is None:
+                supporting["notes"].append(f"Skipped CSV (pandas not installed): {name}")
+                continue
+            try:
+                df = pd.read_csv(_io.BytesIO(b))
+                supporting["tables"].append({"filename": name, "type": "csv", "table": _df_preview(df)})
+            except Exception as e:
+                supporting["notes"].append(f"Failed to parse CSV {name}: {e}")
+            continue
+
+        supporting["notes"].append(f"Unsupported file type for parsing: {name} ({mime})")
+
+        if total_chars > MAX_SUPPORTING_TEXT_CHARS:
+            supporting["notes"].append("Supporting context truncated due to size limits.")
+            break
+
+    return supporting
+
 def bullets_to_html(items: List[str]) -> str:
     items = [i.strip() for i in (items or []) if i and i.strip()]
     if not items:
@@ -508,6 +696,7 @@ def gpt_generate_email(client: OpenAI, model: str, payload: dict, synthesis_imag
             "subject": "string",
             "monthly_overview": "2-3 sentences (max)",
             "key_highlights": ["3-4 bullets (max)"],
+            "main_kpis": ["3-6 bullets (max)"],
             "wins_progress": ["2-3 bullets (max)"],
             "blockers": ["1-3 bullets (max)"],
             "completed_tasks": ["3-5 bullets (max)"],
@@ -533,6 +722,7 @@ def gpt_generate_email(client: OpenAI, model: str, payload: dict, synthesis_imag
             "subject": "string",
             "monthly_overview": "3-4 sentences (max)",
             "key_highlights": ["3-5 bullets (max)"],
+            "main_kpis": ["3-8 bullets (max)"],
             "wins_progress": ["3-5 bullets (max)"],
             "blockers": ["2-4 bullets (max)"],
             "completed_tasks": ["4-8 bullets (max)"],
@@ -702,7 +892,7 @@ with st.expander("Inputs", expanded=True):
 
     uploaded = st.file_uploader(
         "Upload screenshots / supporting docs (optional)",
-        type=["png","jpg","jpeg","pdf","docx","txt"],
+        type=["png","jpg","jpeg","pdf","docx","txt","xlsx","csv"],
         accept_multiple_files=True
     ) or []
     st.session_state.uploaded_files = uploaded
@@ -810,6 +1000,9 @@ if st.button("Generate Email Draft", type="primary", disabled=not can_generate, 
         if f.name.lower().endswith((".png", ".jpg", ".jpeg")):
             synthesis_images.append(f.getvalue())
 
+    # Supporting context (under-the-hood parsing of non-image uploads)
+    supporting_context = build_supporting_context(uploaded or [])
+
     payload = {
         "client_name": st.session_state.client_name.strip(),
         "website": st.session_state.website.strip(),
@@ -818,6 +1011,7 @@ if st.button("Generate Email Draft", type="primary", disabled=not can_generate, 
         "omni_notes": st.session_state.omni_notes_pasted.strip(),
         "verbosity_level": st.session_state.get("verbosity_level", "Quick scan"),
         "uploaded_files": [f.name for f in (uploaded or [])],
+        "supporting_context": supporting_context,
     }
 
     with st.spinner("Drafting email..."):
@@ -831,7 +1025,7 @@ if st.button("Generate Email Draft", type="primary", disabled=not can_generate, 
         fn = (item.get("file_name") or "").strip()
         if fn:
             suggested = (item.get("suggested_section") or "").strip()
-            allowed_secs = {"key_highlights","wins_progress","blockers","completed_tasks","outstanding_tasks"}
+            allowed_secs = {"key_highlights","main_kpis","wins_progress","blockers","completed_tasks","outstanding_tasks"}
             if suggested not in allowed_secs:
                 suggested = "key_highlights"
             st.session_state.image_assignments.setdefault(fn, suggested)
@@ -858,6 +1052,7 @@ monthly_overview = st.text_area("Monthly overview", value=data.get("monthly_over
 
 with st.expander("Edit sections", expanded=True):
     key_highlights = st.text_area("Key highlights (one per line)", value="\n".join(data.get("key_highlights") or []), height=150)
+    main_kpis = st.text_area("Main KPIs (one per line)", value="\n".join(data.get("main_kpis") or []), height=140)
     wins_progress = st.text_area("Wins & progress (one per line)", value="\n".join(data.get("wins_progress") or []), height=170)
     blockers = st.text_area("Blockers / risks (one per line)", value="\n".join(data.get("blockers") or []), height=140)
     completed_tasks = st.text_area("Completed tasks (one per line)", value="\n".join(data.get("completed_tasks") or []), height=170)
@@ -872,7 +1067,7 @@ with st.expander("Edit sections", expanded=True):
     else:
         with st.expander("Optional: adjust screenshot placement / captions", expanded=False):
             st.caption("By default, the app will place screenshots automatically. Use this only if you want to override placement or edit captions.")
-            section_options = ["key_highlights","wins_progress","blockers","completed_tasks","outstanding_tasks"]
+            section_options = ["key_highlights","main_kpis","wins_progress","blockers","completed_tasks","outstanding_tasks"]
             for f in imgs:
                 fn = f.name
                 a, b, c = st.columns([2.2, 1.1, 2.3])
@@ -898,12 +1093,14 @@ with st.expander("Edit sections", expanded=True):
         return [x.strip() for x in (s or "").splitlines() if x.strip()]
 
     highlights_list = _lines(key_highlights)
+    kpis_list = _lines(main_kpis)
     wins_list = _lines(wins_progress)
     blockers_list = _lines(blockers)
     completed_list = _lines(completed_tasks)
     outstanding_list = _lines(outstanding_tasks)
 
     sec_high = section_block("Key highlights", bullets_to_html(highlights_list))
+    sec_kpis = section_block("Main KPIs", bullets_to_html(kpis_list))
     sec_wins = section_block("Wins & progress", bullets_to_html(wins_list))
     sec_blk = section_block("Blockers / risks", bullets_to_html(blockers_list))
     sec_done = section_block("Completed tasks", bullets_to_html(completed_list))
@@ -929,6 +1126,7 @@ with st.expander("Edit sections", expanded=True):
         return "\n".join([x for x in out if x])
 
     sec_high = append_images(sec_high, "key_highlights")
+    sec_kpis = append_images(sec_kpis, "main_kpis")
     sec_wins = append_images(sec_wins, "wins_progress")
     sec_blk = append_images(sec_blk, "blockers")
     sec_done = append_images(sec_done, "completed_tasks")
@@ -972,6 +1170,7 @@ with st.expander("Edit sections", expanded=True):
         .replace("{{DASHTHIS_URL}}", html_escape(st.session_state.dashthis_url.strip() or ""))
         .replace("{{DASHTHIS_LINE}}", html_escape(dashthis_line or ""))
         .replace("{{SECTION_KEY_HIGHLIGHTS}}", sec_high)
+        .replace("{{SECTION_MAIN_KPIS}}", sec_kpis)
         .replace("{{SECTION_WINS_PROGRESS}}", sec_wins)
         .replace("{{SECTION_BLOCKERS}}", sec_blk)
         .replace("{{SECTION_COMPLETED_TASKS}}", sec_done)
