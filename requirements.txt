@@ -1,10 +1,10 @@
 streamlit
-playwright
 openai
 python-dotenv
 pandas
 openpyxl
 pdfplumber
-pypdf2
+PyPDF2
 python-docx
 pillow
+pymupdf

@@ -14,3 +14,11 @@ libcups2
 libdrm2
 libxshmfence1
 libgtk-3-0
+
+# PDF + image rendering stability
+libglib2.0-0
+libgl1
+
+# Font rendering (avoids blank PDFs/images)
+fonts-liberation
+fonts-dejavu-core

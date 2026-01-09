@@ -1,8 +1,28 @@
+# Streamlit secrets
 .streamlit/secrets.toml
+
+# Python
 __pycache__/
 *.pyc
+
+# Virtual environments
 .venv/
 venv/
+
+# OS / misc
+.DS_Store
+
+# Generated artifacts
 *.eml
 *.html
-.DS_Store
+
+# Old / archived builds
+Previous Versions/
+
+# Playwright (if ever used locally)
+.playwright/
+
+# Allow email templates for Streamlit app
+!templates/
+!templates/monthly_email_template.html
+
